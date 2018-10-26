@@ -2,6 +2,8 @@
 
 package net.degoes.essentials
 
+import java.io.File
+
 import scala.util.Try
 
 
@@ -611,7 +613,7 @@ object higher_order {
   // Implement the following higer-order function.
   //
   def compose[A, B, C](f: B => C, g: A => B): A => C =
-    a => f(g(a))
+    g andThen f
 
   //
   // EXERCISE 6
@@ -621,19 +623,17 @@ object higher_order {
   //
   def alt[E1, E2, A, B](l: Parser[E1, A], r: E1 => Parser[E2, B]):
   Parser[E2, Either[A, B]] =
-    Parser[E2, Either[A, B]]((s: String) =>
-      (l.run(s) match {
-        case Left(e1) => r(e1).run(s) match {
-          case Left(e2: E2) => Left(e2)
-          case Right((s: String, b: B)) => Right((s, Right(b)))
-        }
-        case Right((s: String, a: A)) => Right((s, Left(a)))
-      }): Either[E2, (String, Either[A, B])]
+    Parser[E2, Either[A, B]]((s: String) => l.run(s) match {
+      case Left(e1) => r(e1).run(s) match {
+        case Left(e2) => Left(e2)
+        case Right((s, b)) => Right((s, Right(b)))
+      }
+      case Right((s, a)) => Right((s, Left(a)))
+    }
     )
 
 
-  case class Parser[+E, +A](
-                             run: String => Either[E, (String, A)])
+  case class Parser[+E, +A](run: String => Either[E, (String, A)])
 
   object Parser {
     final def fail[E](e: E): Parser[E, Nothing] =
@@ -655,6 +655,7 @@ object poly_functions {
   //
   // EXERCISE 1
   //
+  // faking polymorphic function
   // Create a polymorphic function of two type parameters `A` and `B` called
   // `snd` that returns the second element out of any pair of `A` and `B`.
   //
@@ -924,13 +925,14 @@ object higher_kinded {
   //
   // Implement `Sized` for `Tuple3`.
   //
-  def Tuple3Sized[A, B]: Sized[(A ,B, ?)] =
-    new Sized[(A ,B, ?)] {
+  def Tuple3Sized[A, B]: Sized[(A, B, ?)] =
+    new Sized[(A, B, ?)] {
       override def size[C](fa: (A, B, C)): Int = 1
     }
 }
 
 object tc_motivating {
+
   /*
   A type class is a tuple of three things:
 
@@ -947,26 +949,39 @@ object tc_motivating {
     *
     * Transitivity Law:
     * forall a b c.
-    *   lt(a, b) && lt(b, c) ==
-    *     lt(a, c) || (!lt(a, b) || !lt(b, c))
+    * lt(a, b) && lt(b, c) ==
+    * lt(a, c) || (!lt(a, b) || !lt(b, c))
     */
+  // a type class
+  // A : A set of types
   trait LessThan[A] {
+    // benefits = Document one time your application
+    // **** A set of operations ****
     def lt(l: A, r: A): Boolean
 
+    // benefits = Document one time your application
+    // **** A set laws governing the operations ****
     final def transitivityLaw(a: A, b: A, c: A): Boolean =
       lt(a, b) && lt(b, c) ==
         lt(a, c) || (!lt(a, b) || !lt(b, c))
   }
+
+  // benefits = Document one time your application
+  // Syntax class for the type class (implicit wrapper)
   implicit class LessThanSyntax[A](l: A) {
-    def < (r: A)(implicit A: LessThan[A]): Boolean = A.lt(l, r)
-    def >= (r: A)(implicit A: LessThan[A]): Boolean = !A.lt(l, r)
+    def <(r: A)(implicit A: LessThan[A]): Boolean = A.lt(l, r)
+
+    def >=(r: A)(implicit A: LessThan[A]): Boolean = !A.lt(l, r)
   }
+
   object LessThan {
+    // this function allows me to use : LessThan[Int].lt(1,2)
     def apply[A](implicit A: LessThan[A]): LessThan[A] = A
 
     implicit val LessThanInt: LessThan[Int] = new LessThan[Int] {
       def lt(l: Int, r: Int): Boolean = l < r
     }
+
     implicit def LessThanList[A: LessThan]: LessThan[List[A]] = new LessThan[List[A]] {
       def lt(l: List[A], r: List[A]): Boolean =
         (l, r) match {
@@ -1120,7 +1135,13 @@ object typeclasses {
       sort1(lessThan) ++ List(x) ++ sort1(notLessThan)
   }
 
-  def sort2[A: Ord](l: List[A]): List[A] = ???
+  def sort2[A: Ord](l: List[A]): List[A] = l match {
+    case Nil => Nil
+    case x :: xs =>
+      val (lessThan, notLessThan) = xs.partition(_ < x)
+
+      sort2(lessThan) ++ List(x) ++ sort2(notLessThan)
+  }
 
   //
   // EXERCISE 2
@@ -1138,22 +1159,62 @@ object typeclasses {
 
   sealed trait MyPath
 
-  implicit val MyPathPathLike: PathLike[MyPath] = ???
+  case object Root extends MyPath
+
+  case class Child(parent: MyPath, name: String) extends MyPath
+
+
+  implicit val MyPathPathLike: PathLike[MyPath] = new PathLike[MyPath] {
+
+    override def child(parent: MyPath, name: String): MyPath = Child(parent, name)
+
+    override def parent(node: MyPath): Option[MyPath] = node match {
+      case child: Child => Option(child.parent)
+      case _ => None
+    }
+
+    override def root: MyPath = Root
+  }
+
 
   //
   // EXERCISE 3
   //
   // Create an instance of the `PathLike` type class for `java.io.File`.
   //
-  implicit val FilePathLike: PathLike[java.io.File] = ???
+  implicit val FilePathLike: PathLike[java.io.File] =
+  new PathLike[java.io.File] {
+    override def child(parent: File, name: String): File = new File(parent, name)
+
+    override def parent(node: File): Option[File] = node match {
+      case file: File => Option(file.getParentFile)
+      case _ => None
+    }
+
+    override def root: File = File.listRoots().headOption.getOrElse(new File("/"))
+  }
 
   //
   // EXERCISE 4
   //
   // Create two laws for the `PathLike` type class.
   //
-  object path_like_laws {
-    ???
+  trait PathLikeLaws[A] extends PathLike[A] {
+    def rootHasNoParent: Boolean =
+      parent(root).fold(true)(_ => false)
+
+    def childIdentityLaw(node: A, name: String, assertEquals: (A, A) => Boolean): Boolean = {
+      val c1 = child(node, name)
+
+      (for {
+        p <- parent(c1)
+        c2 = child(p, name)
+      } yield assertEquals(c1, c2)).fold(false)(identity)
+    }
+
+    def parentIdentityLaw(node: A, name: String, assertEquals: (A, A) => Boolean): Boolean = {
+      parent(child(node, name)).map(assertEquals(node, _)).fold(false)(identity)
+    }
   }
 
   //
@@ -1163,8 +1224,19 @@ object typeclasses {
   // into the given named node.
   //
   implicit class PathLikeSyntax[A](a: A) {
-    ???
+
+    def /(name: String)(implicit A: PathLike[A]): A =
+      A.child(a, name)
+
+    def parent(implicit A: PathLike[A]): Option[A] =
+      A.parent(a)
+
+    def root(implicit A: PathLike[A]): A =
+      A.root
+
   }
+
+  //  def root[A: PathLike]: A = PathLike[A].root
 
   //
   // EXERCISE 6
@@ -1175,7 +1247,11 @@ object typeclasses {
     def filter[A](fa: F[A], f: A => Boolean): F[A]
   }
 
-  implicit val FilterableList: Filterable[List] = ???
+  implicit val FilterableList: Filterable[List] =
+    new Filterable[List] {
+      override def filter[A](fa: List[A], f: A => Boolean): List[A] =
+        fa.filter(f)
+    }
 
   //
   // EXERCISE 7
@@ -1184,8 +1260,12 @@ object typeclasses {
   // type for which there exists a `Filterable` instance.
   //
   implicit class FilterableSyntax[F[_], A](fa: F[A]) {
-    ???
+
+    def filterWith(f: A => Boolean)(implicit F: Filterable[F]): F[A] = F.filter(fa, f)
+
   }
+
+  List(1, 2, 3).filterWith(_ == 2)
 
   //
   //
@@ -1205,7 +1285,23 @@ object typeclasses {
     def apply[F[_]](implicit F: Collection[F]): Collection[F] = F
   }
 
-  implicit val ListCollection: Collection[List] = ???
+  implicit val ListCollection: Collection[List] =
+    new Collection[List] {
+      override def empty[A]: List[A] = List.empty
+
+      override def cons[A](a: A, as: List[A]): List[A] = a :: as
+
+      override def uncons[A](fa: List[A]): Option[(A, List[A])] = fa match {
+        case Nil => None
+        case a :: as => Some(a -> as)
+      }
+    }
+
+  implicit class CollectionSyntax[F[_], A](fa: F[A]) {
+    def uncons(implicit F: Collection[F]): Option[(A, F[A])] =
+      F.uncons(fa)
+  }
+
 
   val example = Collection[List].cons(1, Collection[List].empty)
 }
